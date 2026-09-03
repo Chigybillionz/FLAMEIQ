@@ -1,0 +1,57 @@
+name: Deploy to Production
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Pull latest image
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          script: |
+            cd /app/flameiq-backend
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            docker compose down
+            docker compose up -d
+            docker compose logs app --tail 50
+
+      - name: Health check
+        run: |
+          for i in {1..30}; do
+            if curl -f http://${{ secrets.DEPLOY_HOST }}:3000 > /dev/null 2>&1; then
+              echo "✓ Health check passed"
+              exit 0
+            fi
+            echo "Health check attempt $i/30..."
+            sleep 5
+          done
+          echo "✗ Health check failed"
+          exit 1
