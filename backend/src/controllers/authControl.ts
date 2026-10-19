@@ -3,12 +3,13 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { prisma } from "@/db/prisma.js";
 import * as adminService from '@/services/adminService.js'
+import { authService } from '@/services/authService.js';
 import { logger } from '@/utils/logger.js'; 
 import { generateOtp, getOtpExpiration, hashOtp } from "@/utils/otp.js";
 import { emailService } from "../services/emailService.js";
 //import { uploadToCloudinary } from "../utils/upload";
 import { config } from '../config/index.js';
-import { signupSchema, loginSchema, verifyOtpSchema } from "../validators/authValidators.js";
+import { signupSchema, verifyOtpSchema } from "../validators/authValidators.js";
 
 import { AppError, UnauthorizedError } from "@/utils/errors.js";
 import { Role } from "@/generated/prisma/enums.js";
@@ -266,53 +267,50 @@ export const verifyOtp = async (req: Request, res: Response) => {
 
 
 export const signIn = async (req: Request, res: Response) =>{
-  const result = loginSchema.safeParse(req.body);
-    if (!result.success) {
-      return res.status(400).json({ error: result.error.flatten().fieldErrors });
-    }
-    const { email, password } = result.data;
-    const normalizedEmail = email.toLowerCase();
-    const user = await prisma.user.findFirst({
-      where: {
-        email: normalizedEmail,
-        deletedAt: null,
-      },
-      include: { profile: true },
-    });
+  const { email, password } = req.body;
 
-    if(!user){
-      throw new UnauthorizedError("Invalid email or password");
+  try {
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "email and password required"
+      });
     }
-    const PasswordValid = await bcrypt.compare(password, user.password);
-    if(!PasswordValid){
-      logger.warn(`Failed login attempt for email ${email} from IP ${req.ip}`);
-      logger.warn(`Failed login attempt for email ${normalizedEmail} from IP ${(req as any).clientIp || req.ip}`);
-      
-      throw new UnauthorizedError("Invalid email or password");
+
+    // One query: the account and its profile come back together.
+    const user = await authService.findUserForSignIn(String(email).toLowerCase());
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password"
+      });
     }
+
+    const passwordIsValid = await bcrypt.compare(password, user.password);
+    if (!passwordIsValid) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password"
+      });
+    }
+
     if (!user.profile || !user.profile.isVerified) {
-  logger.warn(`Unverified login attempt for email ${normalizedEmail} from IP ${(req as any).clientIp || req.ip}`);
-  
-  throw new UnauthorizedError("Account not verified. Please verify your OTP.");
-}
-    const clientIp = (req as any).clientIp || req.ip || '0.0.0.0';
-    const userAgent = req.headers['user-agent'] || 'unknown';
-    await prisma.loginHistory.create({
-      data: {
-        userId: user.id,
-        ipAddress: clientIp,
-        userAgent: userAgent,
-      },
-    });
-    
+      return res.status(401).json({
+        success: false,
+        message: "Account not verified. Please verify your OTP."
+      });
+    }
+
     const payload = {
       id: user.id,
-      email: user.email,
-      role: user.role,
+      email: String(user.email),
+      role: String(user.role),
     };
 
-    const secret = config.jwtSecret;
-    const token = jwt.sign(payload, secret, { expiresIn: config.jwtExpiresIn as any });
+    const token = jwt.sign(payload, config.jwtSecret, {
+      expiresIn: config.jwtExpiresIn as any,
+    });
 
     return res.status(200).json({
       success: true,
@@ -326,8 +324,15 @@ export const signIn = async (req: Request, res: Response) =>{
         profile: user.profile,
       },
     });
-};
+  } catch (error) {
+    logger.error({ err: error }, "#panic sign in process failed");
 
+    return res.status(500).json({
+      success: false,
+      message: "unexpected server error"
+    });
+  }
+};
 export const forgotPassword = async (req: Request, res: Response) => {
   const { email } = req.body;
 

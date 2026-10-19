@@ -23,6 +23,11 @@ vi.mock('@/services/emailService.js', () => ({
     sendEmail: vi.fn(),
   },
 }));
+vi.mock('@/services/authService.js', () => ({
+  authService: {
+    findUserForSignIn: vi.fn(),
+  },
+}));
 vi.mock('@/utils/logger.js', () => ({
   logger: {
     info: vi.fn(),
@@ -34,6 +39,10 @@ vi.mock('@/utils/logger.js', () => ({
 import { prisma } from '@/db/prisma.js';
 
 const prismaMock = prisma as unknown as ReturnType<typeof mockDeep<PrismaClient>>;
+
+import { authService } from '@/services/authService.js';
+
+const authServiceMock = authService as unknown as { findUserForSignIn: vi.Mock };
 
 describe('Auth Controller', () => {
   beforeEach(() => {
@@ -302,7 +311,7 @@ describe('Auth Controller', () => {
   describe('signIn', () => {
     const mockReq = {
       body: {
-        email: 'test@example.com',
+        email: 'Test@Example.com',
         password: 'password123',
       },
       clientIp: '127.0.0.1',
@@ -320,29 +329,24 @@ describe('Auth Controller', () => {
       email: 'test@example.com',
       password: 'hashedPassword',
       role: 'USER',
-      profile: null,
+      profile: { id: 'profile-123', userId: 'user-123', isVerified: true },
     };
 
-    it('should sign in a valid user, create login history, and return a token', async () => {
-      prismaMock.user.findFirst.mockResolvedValue(mockUser as any);
+    beforeEach(() => {
+      authServiceMock.findUserForSignIn.mockReset();
+    });
+
+    it('should sign in a valid user and return a token', async () => {
+      authServiceMock.findUserForSignIn.mockResolvedValue(mockUser as any);
       (bcrypt.compare as vi.Mock).mockResolvedValue(true);
       (jwt.sign as vi.Mock).mockReturnValue('mock-jwt-token');
 
       await signIn(mockReq, mockRes);
 
-      expect(prismaMock.user.findFirst).toHaveBeenCalledWith({
-        where: { email: 'test@example.com', deletedAt: null },
-        include: { profile: true },
-      });
+      // Looked up once, with the email normalised, in a single query.
+      expect(authServiceMock.findUserForSignIn).toHaveBeenCalledTimes(1);
+      expect(authServiceMock.findUserForSignIn).toHaveBeenCalledWith('test@example.com');
       expect(bcrypt.compare).toHaveBeenCalledWith('password123', 'hashedPassword');
-      expect(jwt.sign).toHaveBeenCalled();
-      expect(prismaMock.loginHistory.create).toHaveBeenCalledWith({
-        data: {
-          userId: mockUser.id,
-          ipAddress: '127.0.0.1',
-          userAgent: 'test-agent',
-        },
-      });
       expect(mockRes.status).toHaveBeenCalledWith(200);
       expect(mockRes.json).toHaveBeenCalledWith({
         success: true,
@@ -358,8 +362,34 @@ describe('Auth Controller', () => {
       });
     });
 
+    it('should not persist a login-history row for a sign-in', async () => {
+      authServiceMock.findUserForSignIn.mockResolvedValue(mockUser as any);
+      (bcrypt.compare as vi.Mock).mockResolvedValue(true);
+      (jwt.sign as vi.Mock).mockReturnValue('mock-jwt-token');
+
+      await signIn(mockReq, mockRes);
+
+      expect(prismaMock.loginHistory.create).not.toHaveBeenCalled();
+    });
+
+    it('should sign the user id, email and role into the token', async () => {
+      authServiceMock.findUserForSignIn.mockResolvedValue(mockUser as any);
+      (bcrypt.compare as vi.Mock).mockResolvedValue(true);
+      (jwt.sign as vi.Mock).mockReturnValue('mock-jwt-token');
+
+      await signIn(mockReq, mockRes);
+
+      // The id must stay the string UUID: coercing it to a number yields NaN,
+      // which serialises to null and makes the token fail authentication.
+      expect(jwt.sign).toHaveBeenCalledWith(
+        { id: 'user-123', email: 'test@example.com', role: 'USER' },
+        expect.any(String),
+        expect.any(Object)
+      );
+    });
+
     it('should return 401 for a non-existent user to prevent email enumeration', async () => {
-      prismaMock.user.findFirst.mockResolvedValue(null);
+      authServiceMock.findUserForSignIn.mockResolvedValue(null);
 
       await signIn(mockReq, mockRes);
 
@@ -371,8 +401,8 @@ describe('Auth Controller', () => {
       expect(bcrypt.compare).not.toHaveBeenCalled(); // Should not attempt to compare password if user not found
     });
 
-    it('should return 401 for an incorrect password and not create login history', async () => {
-      prismaMock.user.findFirst.mockResolvedValue(mockUser as any);
+    it('should return 401 for an incorrect password', async () => {
+      authServiceMock.findUserForSignIn.mockResolvedValue(mockUser as any);
       (bcrypt.compare as vi.Mock).mockResolvedValue(false);
 
       await signIn(mockReq, mockRes);
@@ -382,7 +412,7 @@ describe('Auth Controller', () => {
         success: false,
         message: 'Invalid email or password',
       });
-      expect(prismaMock.loginHistory.create).not.toHaveBeenCalled();
+      expect(jwt.sign).not.toHaveBeenCalled();
     });
 
     it('should return 400 if email or password is not provided', async () => {
@@ -390,11 +420,15 @@ describe('Auth Controller', () => {
       await signIn(reqWithMissingFields, mockRes);
 
       expect(mockRes.status).toHaveBeenCalledWith(400);
-      expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.any(Object) }));
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        message: 'email and password required',
+      });
+      expect(authServiceMock.findUserForSignIn).not.toHaveBeenCalled();
     });
 
     it('should handle unexpected errors during sign-in', async () => {
-      prismaMock.user.findFirst.mockRejectedValue(new Error('DB Error'));
+      authServiceMock.findUserForSignIn.mockRejectedValue(new Error('DB Error'));
 
       await signIn(mockReq, mockRes);
 
