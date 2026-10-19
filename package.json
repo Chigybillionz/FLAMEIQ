@@ -9,6 +9,6 @@
     "typecheck": "pnpm --dir backend run typecheck",
     "prisma:generate": "pnpm --dir backend run prisma:generate",
     "test": "pnpm --dir backend run test",
-    "ci": "pnpm run lint && pnpm run typecheck && pnpm run prisma:generate && pnpm run build && pnpm run test"
+    "ci": "pnpm run lint && pnpm run prisma:generate && pnpm run typecheck && pnpm run build && pnpm run test"
   }
 }

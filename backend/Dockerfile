@@ -25,6 +25,7 @@ FROM dependencies AS build
 
 # Copy remaining source code and build the project
 COPY . .
+RUN pnpm run prisma:generate
 RUN pnpm run build
 
 # --- Production Stage ---
