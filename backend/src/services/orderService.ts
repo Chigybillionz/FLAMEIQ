@@ -12,7 +12,8 @@ import {
 } from '../utils/errors.js';
 
 
-type OrderItemCreateInput = Omit<OrderItem, 'id' | 'orderId' | 'price'> & {
+type OrderItemCreateInput = Omit<OrderItem, 'id' | 'orderId' | 'quantity' | 'price'> & {
+  quantity: number | Prisma.Decimal;
   price: number | Prisma.Decimal;
 };
 

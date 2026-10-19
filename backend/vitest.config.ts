@@ -10,6 +10,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
+    setupFiles: ['./src/testSetup.ts'],
     globals: true,
     coverage: {
       reporter: ['text', 'lcov'],

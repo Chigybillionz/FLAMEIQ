@@ -1,0 +1,14 @@
+{
+  "name": "flameiq",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@12.14.0",
+  "scripts": {
+    "build": "pnpm --dir backend run build",
+    "lint": "pnpm --dir backend run lint",
+    "typecheck": "pnpm --dir backend run typecheck",
+    "prisma:generate": "pnpm --dir backend run prisma:generate",
+    "test": "pnpm --dir backend run test",
+    "ci": "pnpm run lint && pnpm run typecheck && pnpm run prisma:generate && pnpm run build && pnpm run test"
+  }
+}
